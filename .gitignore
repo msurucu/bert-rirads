@@ -47,3 +47,5 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+/backup_20250613_103921_llm_claude_006.py
+/llm_claude_006.py

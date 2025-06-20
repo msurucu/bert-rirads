@@ -8,6 +8,8 @@ import os
 import sys
 import json
 import logging
+import glob
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import warnings
@@ -23,11 +25,19 @@ from transformers import (
     create_optimizer,
     set_seed
 )
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from .config import TrainingConfig, InferenceConfig
 from .data_processing import DataProcessor, SlidingWindowProcessor
 from .evaluation import EvaluationMetrics, ReportGenerator
 from .utils import setup_logging, suppress_tf_logging
+from .monitoring import MetricsLogger, EarlyStoppingMonitor, AlertSystem
 
 class RIRADSClassifier:
     """Main class for text classification training and evaluation."""
@@ -44,9 +54,15 @@ class RIRADSClassifier:
         self.logger = logging.getLogger(__name__)
 
         # Setup logging and random seeds
-        LoggingSetup.setup_logging()
+        setup_logging()
+        suppress_tf_logging()
         self._set_random_seeds()
         self._setup_output_directory()
+        
+        # Initialize monitoring
+        self.metrics_logger = None
+        self.early_stopping = None
+        self.alert_system = None
 
     def _set_random_seeds(self):
         """Set random seeds for reproducibility."""
@@ -56,26 +72,48 @@ class RIRADSClassifier:
         random.seed(self.config.seed)
 
     def _setup_output_directory(self):
-        """Create unique output directory."""
-        output_base = Path(self.config.output_dir)
-        output_base.mkdir(parents=True, exist_ok=True)
+        """Create unique output directory with validation."""
+        try:
+            output_base = Path(self.config.output_dir)
+            output_base.mkdir(parents=True, exist_ok=True)
+            
+            # Validate write permissions
+            test_file = output_base / "test_write.tmp"
+            try:
+                test_file.write_text("test")
+                test_file.unlink()
+            except Exception as e:
+                raise PermissionError(
+                    f"No write permission to output directory: {output_base}"
+                ) from e
 
-        model_name = self.config.model_name.split("/")[1]
-        existing_dirs = glob.glob(f"{self.config.output_dir}output_{model_name}*")
-        count = len(existing_dirs)
+            # Create unique directory name
+            model_name = self.config.model_name.split("/")[-1]  # Handle both local and hub models
+            existing_dirs = glob.glob(f"{self.config.output_dir}output_{model_name}*")
+            count = len(existing_dirs)
 
-        while True:
-            new_dir = f"{self.config.output_dir}output_{model_name}_{count}"
-            if not os.path.exists(new_dir):
-                break
-            count += 1
+            while True:
+                new_dir = f"{self.config.output_dir}output_{model_name}_{count}"
+                if not os.path.exists(new_dir):
+                    break
+                count += 1
 
-        self.output_dir = Path(new_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Output directory: {self.output_dir}")
+            self.output_dir = Path(new_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create subdirectories
+            (self.output_dir / "models").mkdir(exist_ok=True)
+            (self.output_dir / "logs").mkdir(exist_ok=True)
+            (self.output_dir / "plots").mkdir(exist_ok=True)
+            
+            self.logger.info(f"Output directory: {self.output_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to setup output directory: {e}")
+            raise RuntimeError(f"Output directory setup failed: {e}") from e
 
     def load_data(self):
-        """Load and preprocess datasets."""
+        """Load and preprocess datasets with comprehensive validation."""
         self.logger.info("Loading datasets...")
 
         data_files = {
@@ -84,33 +122,106 @@ class RIRADSClassifier:
             'test': self.config.data_dir + self.config.test_file,
         }
 
+        # Validate data files exist
+        missing_files = []
+        for split, filepath in data_files.items():
+            if not Path(filepath).exists():
+                missing_files.append(f"{split}: {filepath}")
+        
+        if missing_files:
+            raise FileNotFoundError(
+                f"Missing data files:\n" + "\n".join(missing_files) +
+                "\n\nPlease ensure all required data files are present."
+            )
+
         try:
-            self.datasets = load_dataset('json', data_files=data_files,)
-            self.logger.info(f"Loaded datasets: {list(self.datasets.keys())}")
+            self.datasets = load_dataset('json', data_files=data_files)
+            
+            # Validate dataset structure
+            for split_name, dataset in self.datasets.items():
+                if len(dataset) == 0:
+                    raise ValueError(f"Dataset '{split_name}' is empty")
+                
+                # Check required columns
+                required_cols = ['sentence1', 'label']
+                missing_cols = [col for col in required_cols if col not in dataset.column_names]
+                if missing_cols:
+                    raise ValueError(
+                        f"Dataset '{split_name}' missing required columns: {missing_cols}"
+                    )
+                
+                # Validate labels
+                unique_labels = set(dataset['label'])
+                invalid_labels = [label for label in unique_labels 
+                                if not isinstance(label, (int, str)) or 
+                                (isinstance(label, str) and not label.isdigit()) or
+                                int(label) < 1 or int(label) > 5]
+                
+                if invalid_labels:
+                    raise ValueError(
+                        f"Dataset '{split_name}' contains invalid labels: {invalid_labels}. "
+                        "Labels must be integers 1-5."
+                    )
+            
+            self.logger.info(f"Successfully loaded datasets: {list(self.datasets.keys())}")
+            
+            # Log dataset statistics
+            for split_name, dataset in self.datasets.items():
+                self.logger.info(f"{split_name}: {len(dataset)} samples")
+                
         except Exception as e:
             self.logger.error(f"Failed to load datasets: {e}")
-            raise
+            raise RuntimeError(f"Dataset loading failed: {e}") from e
 
     def setup_tokenizer_and_labels(self):
-        """Initialize tokenizer and label mappings."""
+        """Initialize tokenizer and label mappings with validation."""
         self.logger.info(f"Loading tokenizer: {self.config.model_name}")
 
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.config.model_name,
-                batch_size=self.config.batch_size,
+                use_fast=True,
+                trust_remote_code=False  # Security best practice
             )
+            
+            # Validate tokenizer
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                self.logger.warning("No pad token found, using eos_token as pad_token")
+                
         except Exception as e:
             self.logger.error(f"Failed to load tokenizer: {e}")
-            raise
+            raise RuntimeError(f"Tokenizer initialization failed: {e}") from e
 
-        # Setup label mappings
-        label_list = self.datasets["train"].unique("label")
-        label_list.sort()
-        self.label2id = {label: i for i, label in enumerate(label_list)}
-        self.id2label = {i: label for label, i in self.label2id.items()}
-
-        self.logger.info(f"Label mappings: {self.id2label}")
+        # Setup label mappings with validation
+        try:
+            label_list = self.datasets["train"].unique("label")
+            
+            # Convert to strings and validate
+            str_labels = [str(label) for label in label_list]
+            numeric_labels = []
+            
+            for label in str_labels:
+                try:
+                    num_label = int(label)
+                    if 1 <= num_label <= 5:
+                        numeric_labels.append(num_label)
+                    else:
+                        raise ValueError(f"Label {label} outside valid range 1-5")
+                except ValueError as e:
+                    raise ValueError(f"Invalid label format: {label}") from e
+            
+            # Sort and create mappings (0-indexed internally)
+            numeric_labels.sort()
+            self.label2id = {str(label): i for i, label in enumerate(numeric_labels)}
+            self.id2label = {i: str(label) for i, label in enumerate(numeric_labels)}
+            
+            self.logger.info(f"Label mappings: {self.id2label}")
+            self.logger.info(f"Number of classes: {len(self.id2label)}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to setup label mappings: {e}")
+            raise RuntimeError(f"Label mapping setup failed: {e}") from e
 
     def tokenize_datasets(self):
         """Tokenize all datasets."""
@@ -702,35 +813,88 @@ class RIRADSClassifier:
             'test_accuracy': test_accuracy
         }
 
-    def train(self):
-        """Main training loop."""
+    def train(self, enable_monitoring: bool = True, enable_early_stopping: bool = True):
+        """Main training loop with enhanced monitoring.
+        
+        Args:
+            enable_monitoring: Enable advanced metrics logging and monitoring
+            enable_early_stopping: Enable early stopping based on validation metrics
+        """
         self.logger.info("Starting training process...")
 
-        # Load and prepare data
-        self.load_data()
-        self.setup_tokenizer_and_labels()
-        self.tokenize_datasets()
-        self.setup_model_and_datasets()
+        # Initialize monitoring systems
+        if enable_monitoring:
+            self.metrics_logger = MetricsLogger(self.output_dir / "logs")
+            self.alert_system = AlertSystem(self.logger)
+            self.metrics_logger.start_training()
+        
+        if enable_early_stopping:
+            self.early_stopping = EarlyStoppingMonitor(
+                patience=5, 
+                min_delta=0.001, 
+                metric="val_accuracy"
+            )
 
-        # Calculate training parameters
-        train_count = len(self.datasets["train"])
-        num_train_steps = (train_count // self.config.batch_size) * self.config.num_epochs
+        try:
+            # Load and prepare data
+            self.load_data()
+            self.setup_tokenizer_and_labels()
+            self.tokenize_datasets()
+            self.setup_model_and_datasets()
 
-        # Setup model
-        self.compile_model(num_train_steps)
-        class_weights = self.calculate_class_weights()
+            # Calculate training parameters
+            train_count = len(self.datasets["train"])
+            num_train_steps = (train_count // self.config.batch_size) * self.config.num_epochs
 
-        # Training loop
-        results = []
-        for epoch in range(self.config.num_epochs):
-            epoch_results = self.train_single_epoch(epoch, class_weights)
-            results.append(epoch_results)
+            # Setup model
+            self.compile_model(num_train_steps)
+            class_weights = self.calculate_class_weights()
 
-        # Save final results summary
-        with open(self.output_dir / "training_summary.json", "w") as f:
-            json.dump({
-                'config': self.config.__dict__,
+            # Training loop
+            results = []
+            for epoch in range(self.config.num_epochs):
+                if self.metrics_logger:
+                    self.metrics_logger.start_epoch(epoch)
+                
+                epoch_results = self.train_single_epoch(epoch, class_weights)
+                epoch_results['epoch'] = epoch
+                results.append(epoch_results)
+                
+                # Log metrics
+                if self.metrics_logger:
+                    self.metrics_logger.end_epoch(epoch, epoch_results)
+                
+                # Check alerts
+                if self.alert_system:
+                    self.alert_system.check_alerts(epoch_results)
+                
+                # Check early stopping
+                if self.early_stopping and self.early_stopping.should_stop(epoch_results):
+                    self.logger.info(f"Early stopping triggered at epoch {epoch}")
+                    break
+
+            # Save final results summary
+            summary = {
+                'config': self.config.to_dict() if hasattr(self.config, 'to_dict') else self.config.__dict__,
                 'results': results
-            }, f, indent=2)
+            }
+            
+            # Add monitoring summaries
+            if self.early_stopping:
+                summary['early_stopping'] = self.early_stopping.get_state()
+            
+            if self.alert_system:
+                summary['alerts'] = self.alert_system.get_alert_summary()
 
-        self.logger.info(f"Training completed! Results saved to {self.output_dir}")
+            with open(self.output_dir / "training_summary.json", "w") as f:
+                json.dump(summary, f, indent=2)
+
+            self.logger.info(f"Training completed! Results saved to {self.output_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Training failed: {e}")
+            raise
+        finally:
+            # Cleanup monitoring
+            if self.metrics_logger:
+                self.metrics_logger.end_training()

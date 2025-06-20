@@ -190,7 +190,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-For questions or support, please open an issue on GitHub or contact [your-email@example.com]
+For questions or support, please open an issue on GitHub or contact rasiterenbuyuktoka@hotmail.com, islerya@gmail.com, msurucu@gmail.com
 
 ---
 
