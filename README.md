@@ -95,8 +95,8 @@ The tool expects JSON files with the following structure:
 | RI-RADS C | Considerably Limited | Two categories of information included                      |
 | RI-RADS D | Deficient            | One category included                    |
 | RI-RADS X |                      | No category included                     |
-RI-RADS, Reason for exam Imaging Reporting and Data System
 
+RI-RADS, Reason for exam Imaging Reporting and Data System
 Key Categories of Information: 
 
 1. Impression: Working or Differential Diagnosis 
