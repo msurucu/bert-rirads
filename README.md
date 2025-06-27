@@ -88,13 +88,13 @@ The tool expects JSON files with the following structure:
 
 ## 📊 RI-RADS Categories
 
-| Grade     | Description          | Information Included in the Requisition                                       |
-|-----------|----------------------|-------------------------------------------------------------------------------|
-| RI-RADS A | Adequate             | All key categories* of information included                                   |
-| RI-RADS B | Barely Adequate      | All key categories of information included, some clinical information missing |
-| RI-RADS C | Considerably Limited | Two categories of information included                                        |
-| RI-RADS D | Deficient            | One category included                                                         |
-| RI-RADS X |                      | No category included                                                          |
+| Grade       | Description          | Information Included in the Requisition                                       |
+|-------------|----------------------|-------------------------------------------------------------------------------|
+| RI-RADS A   | Adequate             | All key categories* of information included                                   |
+| RI-RADS B   | Barely Adequate      | All key categories of information included, some clinical information missing |
+| RI-RADS C   | Considerably Limited | Two categories of information included                                        |
+| RI-RADS D   | Deficient            | One category included                                                         |
+| RI-RADS X   |                      | No category included                                                          |
 
 RI-RADS, Reason for exam Imaging Reporting and Data System
 Key Categories of Information: 
