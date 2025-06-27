@@ -88,13 +88,28 @@ The tool expects JSON files with the following structure:
 
 ## 📊 RI-RADS Categories
 
-| Category | Description | Clinical Significance |
-|----------|-------------|----------------------|
-| RI-RADS 1 | Negative | No findings |
-| RI-RADS 2 | Benign | Benign findings |
-| RI-RADS 3 | Probably Benign | <2% malignancy risk |
-| RI-RADS 4 | Suspicious | 2-95% malignancy risk |
-| RI-RADS 5 | Highly Suspicious | >95% malignancy risk |
+| Grade     | Description          | Information Included in the Requisition  |
+|-----------|----------------------|------------------------------------------|
+| RI-RADS A | Adequate             | All key categories* of information included                              |
+| RI-RADS B | Barely Adequate      | All key categories of information included, some clinical information missing                          |
+| RI-RADS C | Considerably Limited | Two categories of information included                      |
+| RI-RADS D | Deficient            | One category included                    |
+| RI-RADS X |                      | No category included                     |
+RI-RADS, Reason for exam Imaging Reporting and Data System
+
+Key Categories of Information: 
+
+1. Impression: Working or Differential Diagnosis 
+
+2. Clinical Findings:
+- Signs and Symptoms 
+- Chronicity of Current Episode
+- Location of Sign and Symptoms 
+- Pertinent past medical/surgical history
+- Pertinent laboratory findings 
+- Previous imaging reports (when available)
+
+3. Diagnostic Question: such as confirmation and exclusion of diagnosis, grading/staging, pre-operative planning, follow up of progress or response to treatment etc
 
 ## ⚙️ Configuration Options
 
@@ -184,7 +199,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📚 References
 
-1. ACR BI-RADS® Atlas, 5th Edition
+1. [Reason for Exam Imaging Reporting and Data System (RI-RADS): A grading system to standardize radiology requisitions](https://doi.org/10.1016/j.ejrad.2019.108661)
 2. [BERT: Pre-training of Deep Bidirectional Transformers](https://arxiv.org/abs/1810.04805)
 3. [Hugging Face Transformers Documentation](https://huggingface.co/docs/transformers)
 
